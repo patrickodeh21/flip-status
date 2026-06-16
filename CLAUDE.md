@@ -213,68 +213,19 @@ public function videos(): BelongsToMany
 
 ---
 
-## TASK 3 — Make "Read Instructions" Button Stand Out 📋 NOT STARTED
+## TASK 3 — Make "Read Instructions" Button Stand Out ✅ COMPLETE
 
-### Goal
-On the task list (`resources/views/components/checklist/task-item.blade.php`), the "View Instructions" toggle button currently looks too similar to the "Note" button, causing cleaners to miss/ignore it. Make it visually distinct.
+### What was done
+Styled the instructions toggle button to stand out visually from the Note button. Applied changes to both files that render the button:
 
-### Current state (from task-item.blade.php, lines ~115-130)
-```blade
-@if($showDetails)
-    <div class="mt-1">
-        <button
-            type="button"
-            @click="detailsOpen = !detailsOpen"
-            class="inline-flex items-center gap-1.5 text-xs font-semibold text-blue-600 dark:text-blue-400 hover:text-blue-700 transition-colors"
-        >
-            <span x-text="detailsOpen ? 'Hide Instructions' : 'View Instructions'"></span>
-            <svg class="w-4 h-4 transition-transform duration-300" :class="{ 'rotate-180': detailsOpen }" ...>
-                <path ... d="M19 9l-7 7-7-7"></path>
-            </svg>
-        </button>
-    </div>
-@endif
-```
-This is a small text link, positioned ABOVE the task actions footer (Note/Photo buttons). The Note button (in the actions footer, ~line 156-166) is a pill-shaped button with icon + "NOTE" label, `border-gray-200`/`bg-blue-50` styling.
+- **`resources/js/checklist-renderer.js`** (line ~1500) — the LIVE version used by the active checklist page. The button was restyled from a small plain text link into a bold amber badge/pill with an info-circle icon, padding, border, and shadow. The Note button below it remains a small gray/blue pill.
+- **`resources/views/components/checklist/task-item.blade.php`** (line ~107) — the Blade component used by the summary partial and `show-redesigned.blade.php`, updated with the same amber styling for consistency.
 
-NOTE: The screenshot from the live site shows a button labeled "Read Notes" (not "View Instructions") — this suggests there may be ANOTHER button elsewhere, OR the text was customized via the `x-text` binding differently than what's in the source, OR this is from `checklist-renderer.js` which renders a DIFFERENT/DUPLICATE markup for the same concept via JS (recall: `show.blade.php` uses `checklistRenderer` which renders checklist content dynamically via JS, NOT via `<x-checklist.task-item>` directly — that component may only be used in `show-redesigned.blade.php` and `sessions/partials/summary.blade.php`, which are NOT the live-rendered views).
-
-**CRITICAL FIRST STEP for Task 3**: Before changing `task-item.blade.php`, determine whether the LIVE checklist (rendered via `checklistRenderer` / `checklist-renderer.js`) uses this Blade component at all, or renders its own HTML via JS templates. Search:
-```bash
-grep -n "Read Notes\|View Instructions\|Read Instructions\|NOTE\b" resources/js/checklist-renderer.js resources/js/checklist.js
-```
-If the live checklist's HTML is generated in `checklist-renderer.js` (JS template strings), THAT is the file to edit for task 3, not `task-item.blade.php`. The Blade component should still be updated too for consistency (used by `show-redesigned.blade.php` / summary partial), but the JS file is likely the one affecting what cleaners actually see.
-
-### Recommended approach (pending JS file confirmation)
-Make the instructions button visually "stand out":
-- Change from a plain text link to a solid colored badge/pill button — e.g., `bg-amber-100 text-amber-800 border border-amber-300` (matching the amber theme used for the Task 1 FAB, creating visual consistency for "important info" across the app) or a high-contrast color clearly different from the Note button's blue.
-- Increase size slightly (more padding) relative to the Note/Photo buttons.
-- Consider adding a small icon (e.g., an exclamation/info circle icon) before the text.
-- Position it in its own row, clearly separated (more vertical margin) from the Note/Photo button row — current code already has it in `<div class="mt-1">` above the actions footer with `mt-4` — increase separation or add a visual divider.
-- DO NOT remove or change the "Note" button — only the instructions button's styling.
-
-Example revised classes (illustrative — adjust based on what JS file or Blade component is found to be authoritative):
-```blade
-<button
-    type="button"
-    @click="detailsOpen = !detailsOpen"
-    class="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-200 border-2 border-amber-300 dark:border-amber-700 hover:bg-amber-200 dark:hover:bg-amber-900/50 transition-colors shadow-sm"
->
-    <svg class="w-5 h-5" ...><!-- info/exclamation icon --></svg>
-    <span x-text="detailsOpen ? 'Hide Instructions' : 'Read Instructions'"></span>
-    <svg class="w-4 h-4 transition-transform duration-300" :class="{ 'rotate-180': detailsOpen }" ...>
-        <path d="M19 9l-7 7-7-7"></path>
-    </svg>
-</button>
-```
-
-### Testing plan for Task 3
-1. Identify the correct file (Blade component vs JS template) via the grep above.
-2. Edit styling.
-3. `npm run build` if Tailwind classes changed and/or rebuild JS bundle (`npm run build` covers both Vite-built JS and CSS).
-4. Load a session as a cleaner with a task that has instructions, confirm the button is now visually distinct from "Note" — different color, size, and/or spacing.
-5. Confirm clicking it still toggles the instructions panel correctly (no behavior change, styling only).
-6. Confirm the Note button is unchanged.
+Key visual changes applied:
+- Bold text, more padding, full border, and background color (`bg-amber-100`, `text-amber-800`, `border-2 border-amber-300`, `shadow-sm`)
+- Added info-circle icon before the label
+- Kept existing position in its own row above the Note/Photo action footer
+- No behavior changes — the toggle click handler is untouched
 
 ---
 
