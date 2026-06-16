@@ -136,6 +136,7 @@
                 <option value="room">Room</option>
                 <option value="inventory">Inventory (Prompt housekeeper for input quantity)</option>
                 <option value="verify">Verify (Requires a photo upload to complete)</option>
+                <option value="instructions">Instructions Only (Informational block for staff)</option>
             </select>
         </div>
 

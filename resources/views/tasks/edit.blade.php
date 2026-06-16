@@ -73,6 +73,7 @@
                         <option value="room" @selected(old('type', $task->type) === 'room')>Task (Standard checklist item)</option>
                         <option value="inventory" @selected(old('type', $task->type) === 'inventory')>Inventory (Prompt housekeeper for input quantity)</option>
                         <option value="verify" @selected(old('type', $task->type) === 'verify')>Verify (Requires a photo upload to complete)</option>
+                        <option value="instructions" @selected(old('type', $task->type) === 'instructions')>Instructions Only (Informational block for staff)</option>
                     </select>
                     <x-form.error :messages="$errors->get('type')" />
                 </div>
