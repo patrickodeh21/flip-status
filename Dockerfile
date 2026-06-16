@@ -1,61 +1,51 @@
-FROM php:8.3-fpm
+FROM php:8.3-cli
 
-# System dependencies
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
-    git curl libpng-dev libonig-dev libxml2-dev \
-    zip unzip sqlite3 libsqlite3-dev \
-    default-mysql-client nginx nodejs npm \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+    git \
+    curl \
+    libpng-dev \
+    libonig-dev \
+    libxml2-dev \
+    zip \
+    unzip \
+    sqlite3 \
+    libsqlite3-dev \
+    default-mysql-client \
+    nodejs \
+    npm
 
-# PHP extensions
+# Clear cache
+RUN apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Install PHP extensions
 RUN docker-php-ext-install pdo_sqlite pdo_mysql mbstring exif pcntl bcmath gd
 
-# Increase upload limits
-RUN echo "upload_max_filesize=512M\npost_max_size=512M\nmemory_limit=512M\nmax_input_time=600\nmax_execution_time=600" \
-    > /usr/local/etc/php/conf.d/uploads.ini
-
+# Get latest Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
+# Set working directory
 WORKDIR /app
+
+# Copy application files
 COPY . .
 
-RUN composer install --optimize-autoloader --no-dev
+# Install dependencies
+RUN composer install --optimize-autoloader
 RUN npm install && npm run build
 
-# Nginx config
-RUN echo 'server { \
-    listen 8000; \
-    root /app/public; \
-    index index.php; \
-    client_max_body_size 512M; \
-    location / { try_files $uri $uri/ /index.php?$query_string; } \
-    location ~ \.php$ { \
-        fastcgi_pass 127.0.0.1:9000; \
-        fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name; \
-        include fastcgi_params; \
-        fastcgi_read_timeout 600; \
-    } \
-    location ~* \.(jpg|jpeg|png|gif|mp4|webm|mov|avi)$ { \
-        expires 30d; \
-        add_header Cache-Control "public, no-transform"; \
-    } \
-}' > /etc/nginx/sites-available/default
+# Set permissions for dirs that exist at build time
+RUN chmod -R 775 bootstrap/cache
 
-# Permissions for writable dirs that exist at build time
-RUN chmod -R 775 bootstrap/cache \
-    && chown -R www-data:www-data bootstrap/cache
-
+# Expose port
 EXPOSE 8000
 
-# Start script handles runtime setup (volume is mounted here, not at build)
+# Runtime: volume is mounted here so sqlite and storage setup happens now
 CMD bash -c "\
     mkdir -p storage/app/public storage/framework/cache storage/framework/sessions storage/framework/views storage/logs \
+    && touch storage/app/database.sqlite \
     && chmod -R 775 storage \
-    && chown -R www-data:www-data storage \
     && php artisan storage:link --force \
     && php artisan migrate --force \
     && php artisan db:seed --force \
-    && php artisan config:cache \
-    && php artisan route:cache \
-    && php-fpm -D \
-    && nginx -g 'daemon off;'"
+    && php -d upload_max_filesize=512M -d post_max_size=512M -d memory_limit=512M -d max_input_time=600 -S 0.0.0.0:8000 -t public public/router.php"
