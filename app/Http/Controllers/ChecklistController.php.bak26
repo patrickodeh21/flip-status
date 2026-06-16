@@ -1,0 +1,477 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Http\Requests\ChecklistNoteRequest;
+use App\Http\Requests\ChecklistToggleRequest;
+use App\Models\ChecklistItem;
+use App\Models\ChecklistItemPhoto;
+use App\Models\CleaningSession;
+use App\Models\Room;
+use App\Models\Task;
+use App\Services\ImageTimestampService;
+use App\Services\PersistentPhotoStorage;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
+
+class ChecklistController extends Controller
+{
+    public function toggle(ChecklistToggleRequest $request, CleaningSession $session, Room $room, Task $task)
+    {
+        // Authorization: Allow if user is housekeeper assigned to this session or admin/owner
+        $user = auth()->user();
+        $isAssignedHousekeeper = $session->housekeeper_id === $user->id;
+        $isOwnerOrAdmin = $user->hasRole(['admin', 'owner', 'company']);
+        
+        if (!$isAssignedHousekeeper && !$isOwnerOrAdmin) {
+            return response()->json(['message' => 'Unauthorized access to this session.'], 403);
+        }
+    
+        Log::info("ChecklistController@toggle: Session {$session->id}, Room {$room->id}, Task {$task->id}");
+        // RELAXED CHECK: If item exists, allow toggle
+        $itemExists = ChecklistItem::where('session_id', $session->id)
+            ->where('room_id', $room->id)
+            ->where('task_id', $task->id)
+            ->exists();
+
+        if (! $itemExists) {
+            // Explicitly check room-property relationship for NEW items
+            if (! $room->properties()->where('properties.id', $session->property_id)->exists()) {
+                Log::error("ChecklistController@toggle: Room {$room->id} not attached to property {$session->property_id}");
+                return response()->json(['message' => 'Room is not attached to this property.'], 404);
+            }
+
+             // Explicitly check task-room relationship for NEW items
+            if (! $room->tasks()->where('tasks.id', $task->id)->exists()) {
+                Log::error("ChecklistController@toggle: Task {$task->id} not attached to room {$room->id}");
+                return response()->json(['message' => 'Task is not attached to this room.'], 404);
+            }
+        }
+
+        // Create if missing (unique on session_id+room_id+task_id is recommended at DB level)
+        $item = ChecklistItem::firstOrCreate(
+            [
+                'session_id' => $session->id,
+                'room_id'    => $room->id,
+                'task_id'    => $task->id,
+            ],
+            [
+                'user_id' => auth()->id(),
+                'checked' => false,
+            ]
+        );
+
+        $nowChecked = ! $item->checked;
+
+        $item->update([
+            'checked'    => $nowChecked,
+            'checked_at' => $nowChecked ? now() : null,
+            'user_id'    => auth()->id(),
+        ]);
+
+        // Return JSON for AJAX requests
+        if ($request->expectsJson()) {
+            return response()->json([
+                'success' => true,
+                'checked' => $nowChecked,
+                'item'    => [
+                    'id'         => $item->id,
+                    'checked'    => $item->checked,
+                    'checked_at' => $item->checked_at?->toIso8601String(),
+                ],
+            ]);
+        }
+
+        return back();
+    }
+
+    /**
+     * Toggle property-level task (no room).
+     */
+    public function togglePropertyTask(ChecklistToggleRequest $request, CleaningSession $session, Task $task)
+    {
+        Log::info("ChecklistController@togglePropertyTask: Session {$session->id}, Task {$task->id}");
+        // RELAXED CHECK: If the checklist item ALREADY exists for this session, we allow toggling it,
+        // even if the task was theoretically removed from the property definition after session start.
+        $itemExists = ChecklistItem::where('session_id', $session->id)
+            ->where('task_id', $task->id)
+            ->whereNull('room_id')
+            ->exists();
+
+        if (! $itemExists) {
+            // RELAXED CHECK: We allow toggling if the session and task exist. 
+            // We only log a warning if it's not strictly attached to the property definitions,
+            // to avoid blocking work due to sync delays.
+            $isAttached = $session->property->propertyTasks()->where('tasks.id', $task->id)->exists();
+            if (!$isAttached) {
+                Log::warning("ChecklistController@togglePropertyTask: Task {$task->id} not found as property-level task for property {$session->property_id}, but allowing toggle.");
+            }
+        }
+
+        // Create if missing
+        $item = ChecklistItem::firstOrCreate(
+            [
+                'session_id' => $session->id,
+                'room_id'    => null, // Property-level tasks have no room
+                'task_id'    => $task->id,
+            ],
+            [
+                'user_id' => auth()->id(),
+                'checked' => false,
+            ]
+        );
+
+        $nowChecked = ! $item->checked;
+
+        $item->update([
+            'checked'    => $nowChecked,
+            'checked_at' => $nowChecked ? now() : null,
+            'user_id'    => auth()->id(),
+        ]);
+
+        // Return JSON for AJAX requests
+        if ($request->expectsJson()) {
+            return response()->json([
+                'success' => true,
+                'checked' => $nowChecked,
+                'item'    => [
+                    'id'         => $item->id,
+                    'checked'    => $item->checked,
+                    'checked_at' => $item->checked_at?->toIso8601String(),
+                ],
+            ]);
+        }
+
+        return back();
+    }
+
+    /**
+     * Add/update a note for a specific (session, room, task).
+     */
+    public function note(ChecklistNoteRequest $request, CleaningSession $session, Room $room, Task $task)
+    {
+        $this->assertRoomOnSessionProperty($room, $session);
+        
+        // Relaxed check for task-room
+        $itemExists = ChecklistItem::where('session_id', $session->id)
+            ->where('room_id', $room->id)
+            ->where('task_id', $task->id)
+            ->exists();
+
+        if (!$itemExists) {
+            $this->assertTaskAttachedToRoom($task, $room);
+        }
+
+        $item = ChecklistItem::firstOrCreate(
+            [
+                'session_id' => $session->id,
+                'room_id'    => $room->id,
+                'task_id'    => $task->id,
+            ],
+            [
+                'user_id' => auth()->id(),
+                'checked' => false,
+            ]
+        );
+
+        $item->update([
+            'note'    => $request->validated('note'),
+            'user_id' => auth()->id(),
+        ]);
+
+        // Return JSON for AJAX requests
+        if ($request->expectsJson()) {
+            return response()->json([
+                'success' => true,
+                'message' => 'Note saved successfully',
+                'item'    => [
+                    'id'   => $item->id,
+                    'note' => $item->note,
+                ],
+            ]);
+        }
+
+        return back();
+    }
+
+    /**
+     * Add/update a note for property-level task (no room).
+     */
+    public function notePropertyTask(ChecklistNoteRequest $request, CleaningSession $session, Task $task)
+    {
+        // RELAXED CHECK: If the checklist item ALREADY exists for this session, we allow adding notes,
+        // even if the task was theoretically removed from the property definition.
+        $itemExists = ChecklistItem::where('session_id', $session->id)
+            ->where('task_id', $task->id)
+            ->whereNull('room_id')
+            ->exists();
+
+        if (! $itemExists) {
+            abort_unless(
+                $session->property->propertyTasks()->where('tasks.id', $task->id)->exists(),
+                404,
+                'Task not found as property-level task for this session.'
+            );
+        }
+
+        $item = ChecklistItem::firstOrCreate(
+            [
+                'session_id' => $session->id,
+                'room_id'    => null, // Property-level tasks have no room
+                'task_id'    => $task->id,
+            ],
+            [
+                'user_id' => auth()->id(),
+                'checked' => false,
+            ]
+        );
+
+        $item->update([
+            'note'    => $request->validated('note'),
+            'user_id' => auth()->id(),
+        ]);
+
+        // Return JSON for AJAX requests
+        if ($request->expectsJson()) {
+            return response()->json([
+                'success' => true,
+                'message' => 'Note saved successfully',
+                'item'    => [
+                    'id'   => $item->id,
+                    'note' => $item->note,
+                ],
+            ]);
+        }
+
+        return back();
+    }
+
+    // ---------------------------
+    // Guards for new relationships
+    // ---------------------------
+
+    /** Ensure the given room is attached to the session's property (property_room pivot). */
+    private function assertRoomOnSessionProperty(Room $room, CleaningSession $session): void
+    {
+        $propertyId = $session->property_id;
+
+        abort_unless(
+            $room->properties()->where('properties.id', $propertyId)->exists(),
+            404
+        );
+    }
+
+    /** Ensure the given task is attached to the given room (room_task pivot). */
+    private function assertTaskAttachedToRoom(Task $task, Room $room): void
+    {
+        abort_unless(
+            $room->tasks()->where('tasks.id', $task->id)->exists(),
+            404
+        );
+    }
+
+    /**
+     * Upload a photo for a specific task (room-level).
+     */
+    public function taskPhoto(Request $request, CleaningSession $session, Room $room, Task $task)
+    {
+        $this->assertRoomOnSessionProperty($room, $session);
+        // RELAXED CHECK
+         $itemExists = ChecklistItem::where('session_id', $session->id)
+            ->where('room_id', $room->id)
+            ->where('task_id', $task->id)
+            ->exists();
+
+        if (!$itemExists) {
+            $this->assertTaskAttachedToRoom($task, $room);
+        }
+
+        $request->validate([
+            'photo' => 'required|image|max:10240', // 10MB max
+            'note' => 'required|string|max:1000',
+        ]);
+
+        // Get or create the checklist item
+        $item = ChecklistItem::firstOrCreate(
+            [
+                'session_id' => $session->id,
+                'room_id'    => $room->id,
+                'task_id'    => $task->id,
+            ],
+            [
+                'user_id' => auth()->id(),
+                'checked' => false,
+            ]
+        );
+
+        // Process and store the photo with timestamp overlay
+        $photo = $this->processAndStorePhoto($request->file('photo'), $session);
+
+        // Store the photo reference
+        $photoRecord = ChecklistItemPhoto::create([
+            'checklist_item_id' => $item->id,
+            'path' => $photo['path'],
+            'note' => $request->input('note'),
+            'captured_at' => now(),
+        ]);
+
+        if ($request->expectsJson()) {
+            return response()->json([
+                'success' => true,
+                'message' => 'Photo uploaded successfully',
+                'photo' => [
+                    'id'          => $photoRecord->id,
+                    'url'         => $photoRecord->url,
+                    'note'        => $photoRecord->note,
+                    'captured_at' => $photoRecord->captured_at?->toIso8601String(),
+                ],
+            ]);
+        }
+
+        return back()->with('success', 'Photo uploaded successfully');
+    }
+
+    /**
+     * Upload a photo for a property-level task.
+     */
+    public function propertyTaskPhoto(Request $request, CleaningSession $session, Task $task)
+    {
+        // RELAXED CHECK
+         $itemExists = ChecklistItem::where('session_id', $session->id)
+            ->where('task_id', $task->id)
+            ->whereNull('room_id')
+            ->exists();
+
+        if (!$itemExists) {
+            abort_unless(
+                $session->property->propertyTasks()->where('tasks.id', $task->id)->exists(),
+                404,
+                'Task not found as property-level task for this session.'
+            );
+        }
+
+        $request->validate([
+            'photo' => 'required|image|max:10240', // 10MB max
+            'note' => 'required|string|max:1000',
+        ]);
+
+        // Get or create the checklist item
+        $item = ChecklistItem::firstOrCreate(
+            [
+                'session_id' => $session->id,
+                'room_id'    => null,
+                'task_id'    => $task->id,
+            ],
+            [
+                'user_id' => auth()->id(),
+                'checked' => false,
+            ]
+        );
+
+        // Process and store the photo with timestamp overlay
+        $photo = $this->processAndStorePhoto($request->file('photo'), $session);
+
+        // Store the photo reference
+        $photoRecord = ChecklistItemPhoto::create([
+            'checklist_item_id' => $item->id,
+            'path' => $photo['path'],
+            'note' => $request->input('note'),
+            'captured_at' => now(),
+        ]);
+
+        if ($request->expectsJson()) {
+            return response()->json([
+                'success' => true,
+                'message' => 'Photo uploaded successfully',
+                'photo' => [
+                    'id'          => $photoRecord->id,
+                    'url'         => $photoRecord->url,
+                    'note'        => $photoRecord->note,
+                    'captured_at' => $photoRecord->captured_at?->toIso8601String(),
+                ],
+            ]);
+        }
+
+        return back()->with('success', 'Photo uploaded successfully');
+    }
+
+    /**
+     * Process photo and add timestamp overlay.
+     */
+    private function processAndStorePhoto($file, CleaningSession $session): array
+    {
+        $capturedAt = now();
+
+        // Generate unique filename
+        $filename = 'task_photo_' . $session->id . '_' . time() . '_' . uniqid() . '.' . $file->getClientOriginalExtension();
+        $path = 'checklist-photos/' . $session->id . '/' . $filename;
+
+        // Ensure target directory exists (important for serverless temp roots)
+        Storage::disk('public')->makeDirectory('checklist-photos/' . $session->id);
+
+        // Store the file first
+        $storedPath = Storage::disk('public')->putFileAs(
+            'checklist-photos/' . $session->id,
+            $file,
+            $filename
+        );
+
+        if (!$storedPath) {
+            throw new \RuntimeException('Unable to store uploaded checklist photo.');
+        }
+
+        // Apply timestamp overlay using the service
+        $absolutePath = Storage::disk('public')->path($storedPath);
+        ImageTimestampService::overlay($absolutePath, $capturedAt);
+        PersistentPhotoStorage::persistFromPublicDisk($storedPath);
+
+        return [
+            'path' => $storedPath,
+            'timestamp' => $capturedAt->format('Y-m-d H:i:s'),
+        ];
+    }
+
+    /**
+     * Skip a room in the cleaning session.
+     */
+    public function skipRoom(Request $request, CleaningSession $session, Room $room)
+    {
+        $this->assertRoomOnSessionProperty($room, $session);
+
+        $skipped = $session->skipped_rooms ?? [];
+        if (!in_array($room->id, $skipped)) {
+            $skipped[] = $room->id;
+            $session->skipped_rooms = $skipped;
+            $session->save();
+        }
+
+        if ($request->expectsJson()) {
+            return response()->json(['success' => true, 'skipped_rooms' => $skipped]);
+        }
+
+        return back();
+    }
+
+    /**
+     * Unskip a room in the cleaning session.
+     */
+    public function unskipRoom(Request $request, CleaningSession $session, Room $room)
+    {
+        $this->assertRoomOnSessionProperty($room, $session);
+
+        $skipped = $session->skipped_rooms ?? [];
+        if (in_array($room->id, $skipped)) {
+            $skipped = array_values(array_diff($skipped, [$room->id]));
+            $session->skipped_rooms = $skipped;
+            $session->save();
+        }
+
+        if ($request->expectsJson()) {
+            return response()->json(['success' => true, 'skipped_rooms' => $skipped]);
+        }
+
+        return back();
+    }
+}

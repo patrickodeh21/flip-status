@@ -1,0 +1,27 @@
+# HK-Checklist - Project Update & Bug Fix Summary
+Date: 2026-02-14
+
+## ✅ Checklist & UI Bug Fixes
+- **Toggle 404 Error Fixed**: Resolved a critical issue where toggling checklist items caused 404 errors. This was caused by a mismatch between the frontend route name (`sessions.data`) and the backend definition. The route has been standardized.
+- **Improved Toggle Reliability**: Updated `ChecklistController@togglePropertyTask` with relaxed validation to prevent "stuck" checkboxes during session sync.
+- **Broken Image Fallbacks**: Implemented `onerror` logic across all checklist views. If a seeded image or uploaded photo is missing, the system now displays a professional "Photo Missing" placeholder instead of a broken link icon.
+- **Storage Symlink Restoration**: Fixed the `public/storage` junction point to ensure all local media assets are served correctly.
+
+## 📅 iCal & Scheduling Enhancements
+- **Dual-Source Calendar Sync**: Added support for both Airbnb and Vrbo iCal feeds simultaneously per property.
+- **Unscheduled Checkout Detection**: The dashboard now identifies booking checkouts from iCal that do not yet have a corresponding cleaning session scheduled.
+- **Action Required Alerts**: Owners and Admins now receive prominent dashboard notifications for unscheduled checkouts.
+- **"NEW" Badge Indicator**: Added visual cues for checkouts and bookings that have been discovered since the user's last login.
+
+## 👥 Role & Visibility Updates
+- **Company Role Polishing**: Enhanced the 'Company' user role to properly manage multiple property owners and visibility across their housekeepers.
+- **Housekeeper Privacy**: Refined session visibility logic so housekeepers exclusively see their assigned upcoming work.
+- **Last Login Tracking**: Implemented session-based tracking of `last_login_at` to facilitate "New Since Last Login" notifications.
+
+## 🛠 Setup & Portability
+- **Clean Delivery Version**: Removed all development artifacts including `.git`, `.env`, `node_modules`, `vendor`, and unit tests to ensure a clean slate for the user.
+- **Start Scripts**: Included `start-server.bat` and `fix-storage-symlink.bat` for easy one-click local development setup.
+- **Portable Runtime**: Maintained the `bin/` folder with a self-contained PHP environment.
+
+---
+*Prepared for final delivery. All core requirements for iCal integration and checklist bug fixes have been met.*

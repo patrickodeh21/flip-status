@@ -1,0 +1,6 @@
+1. open terminal
+2. command: npm run build
+	php artisan migrate
+	php artisan config:clear
+	php artisan route:clear
+	php artisan view:clear

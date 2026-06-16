@@ -1,0 +1,162 @@
+<?php
+
+use Illuminate\Support\Facades\Route;
+use App\Http\Controllers\ProfileController;
+use App\Http\Controllers\PropertyController;
+use App\Http\Controllers\ChecklistController;
+use App\Http\Controllers\SessionController;
+use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\CalendarController;
+use App\Http\Controllers\ManageSessionController;
+use App\Http\Controllers\SessionReportController;
+use App\Http\Controllers\TeamController;
+use App\Models\User;
+use App\Models\CleaningSession;
+
+/*
+|--------------------------------------------------------------------------
+| Web Routes
+|--------------------------------------------------------------------------
+|
+| Here is where you can register web routes for your application. These
+| routes are loaded by the RouteServiceProvider and all of them will
+| be assigned to the "web" middleware group. Make something great!
+|
+*/
+
+Route::get('/', function () {
+    return view('welcome');
+});
+
+Route::get('/reports/sessions/{token}', [SessionReportController::class, 'show'])
+    ->where('token', '[0-9a-z]+')
+    ->name('reports.sessions.show');
+Route::get('/reports/sessions/{token}/photos.zip', [SessionReportController::class, 'photosZip'])
+    ->where('token', '[0-9a-z]+')
+    ->name('reports.sessions.photos.zip');
+Route::get('/reports/sessions/{token}/photos/download/{path}', [SessionReportController::class, 'photoDownload'])
+    ->where([
+        'token' => '[0-9a-z]+',
+        'path' => '.*',
+    ])
+    ->name('reports.sessions.photo.download');
+Route::get('/reports/sessions/{token}/photos/{path}', [SessionReportController::class, 'photo'])
+    ->where([
+        'token' => '[0-9a-z]+',
+        'path' => '.*',
+    ])
+    ->name('reports.sessions.photo');
+
+Route::get('/dashboard', DashboardController::class)->middleware(['auth', 'verified'])->name('dashboard');
+
+Route::middleware('auth')->group(function () {
+    Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');
+    Route::patch('/profile', [ProfileController::class, 'update'])->name('profile.update');
+    Route::delete('/profile', [ProfileController::class, 'destroy'])->name('profile.destroy');
+
+    // Properties
+    Route::resource('properties', PropertyController::class);
+
+    // Rooms within properties
+    Route::get('properties/{property}/rooms', [PropertyController::class, 'rooms'])->name('properties.rooms.index');
+    Route::put('properties/{property}/rooms/{room}', [PropertyController::class, 'updateRoom'])->name('properties.rooms.update');
+    Route::delete('properties/{property}/rooms/{room}', [PropertyController::class, 'destroyRoom'])->name('properties.rooms.destroy');
+
+    // Tasks within rooms
+    Route::get('properties/{property}/rooms/{room}/tasks', [PropertyController::class, 'tasks'])->name('properties.tasks.index');
+    Route::post('properties/{property}/rooms/{room}/tasks', [PropertyController::class, 'storeTask'])->name('properties.tasks.store');
+    Route::post('properties/{property}/rooms/{room}/tasks/bulk', [PropertyController::class, 'bulkStoreTask'])->name('properties.tasks.bulk-store');
+    Route::put('properties/{property}/rooms/{room}/tasks/{task}', [PropertyController::class, 'updateTask'])->name('properties.tasks.update');
+    Route::delete('properties/{property}/rooms/{room}/tasks/{task}', [PropertyController::class, 'detachTask'])->name('properties.tasks.detach');
+
+    // Property-level tasks
+    Route::get('properties/{property}/tasks', [PropertyController::class, 'propertyTasks'])->name('properties.property-tasks.index');
+    Route::post('properties/{property}/tasks', [PropertyController::class, 'storePropertyTask'])->name('properties.property-tasks.store');
+    Route::put('properties/{property}/tasks/{task}', [PropertyController::class, 'updatePropertyTask'])->name('properties.property-tasks.update');
+    Route::delete('properties/{property}/tasks/{task}', [PropertyController::class, 'detachPropertyTask'])->name('properties.property-tasks.detach');
+
+    // Housekeeper Sessions
+    Route::get('/sessions', [SessionController::class, 'index'])->name('sessions.index');
+    Route::get('/sessions/{session}', [SessionController::class, 'show'])->name('sessions.show');
+    Route::post('/sessions/{session}/start', [SessionController::class, 'start'])->name('sessions.start');
+    Route::post('/sessions/{session}/complete', [SessionController::class, 'complete'])->name('sessions.complete');
+
+    // Checklist data endpoint
+    Route::get('/sessions/{session}/data', [SessionController::class, 'getData'])->name('sessions.data');
+    // Legacy API path kept for compatibility
+    Route::get('/api/sessions/{session}/data', [SessionController::class, 'getData'])->name('sessions.data.api');
+    Route::post('/sessions/{session}/rooms/{room}/tasks/{task}/toggle', [ChecklistController::class, 'toggle'])->name('checklist.toggle');
+    Route::post('/sessions/{session}/rooms/{room}/tasks/{task}/note', [ChecklistController::class, 'note'])->name('checklist.note');
+    Route::post('/sessions/{session}/rooms/{room}/tasks/{task}/photo', [ChecklistController::class, 'taskPhoto'])->name('checklist.photo');
+    Route::delete('/sessions/{session}/rooms/{room}/tasks/{task}/photo/{photo}', [ChecklistController::class, 'deletePhoto'])->name('checklist.photo.delete');
+
+    // Property-level checklist interactions (no room)
+    Route::post('/sessions/{session}/tasks/{task}/toggle', [ChecklistController::class, 'togglePropertyTask'])->name('checklist.property-task.toggle');
+    Route::post('/sessions/{session}/tasks/{task}/note', [ChecklistController::class, 'notePropertyTask'])->name('checklist.property-task.note');
+    Route::post('/sessions/{session}/tasks/{task}/photo', [ChecklistController::class, 'propertyTaskPhoto'])->name('checklist.property-task.photo');
+
+    // Add Session Routes (Admin/Owner)
+    Route::get('/manage/sessions', [ManageSessionController::class, 'index'])->name('manage.sessions.index');
+    Route::get('/manage/sessions/create', [ManageSessionController::class, 'create'])->name('manage.sessions.create');
+    Route::post('/manage/sessions', [ManageSessionController::class, 'store'])->name('manage.sessions.store');
+    Route::get('/manage/sessions/{session}/edit', [ManageSessionController::class, 'edit'])->name('manage.sessions.edit');
+    Route::put('/manage/sessions/{session}', [ManageSessionController::class, 'update'])->name('manage.sessions.update');
+    Route::delete('/manage/sessions/{session}', [ManageSessionController::class, 'destroy'])->name('manage.sessions.destroy');
+
+    // Calendar Routes
+    Route::get('/calendar', [CalendarController::class, 'index'])->name('calendar.index');
+    Route::get('/api/calendar/events', [CalendarController::class, 'events'])->name('api.calendar.events');
+
+    // User Management Routes
+    Route::get('/users', [\App\Http\Controllers\UserController::class, 'index'])->name('users.index');
+    Route::get('/users/create', [\App\Http\Controllers\UserController::class, 'create'])->name('users.create');
+    Route::post('/users', [\App\Http\Controllers\UserController::class, 'store'])->name('users.store');
+    Route::get('/users/{user}/edit', [\App\Http\Controllers\UserController::class, 'edit'])->name('users.edit');
+    Route::put('/users/{user}', [\App\Http\Controllers\UserController::class, 'update'])->name('users.update');
+    Route::delete('/users/{user}', [\App\Http\Controllers\UserController::class, 'destroy'])->name('users.destroy');
+
+    // Final Additional Routes to fix 500 errors
+    Route::post('properties/{property}/duplicate', [\App\Http\Controllers\PropertyDuplicateController::class, 'store'])->name('properties.duplicate');
+    Route::post('properties/{property}/rooms/order', [\App\Http\Controllers\PropertyRoomOrderController::class, 'update'])->name('properties.rooms.order');
+    Route::post('properties/{property}/rooms', [\App\Http\Controllers\PropertyRoomController::class, 'store'])->name('properties.rooms.store');
+    Route::post('properties/{property}/rooms/attach', [\App\Http\Controllers\PropertyRoomAttachController::class, 'store'])->name('properties.rooms.attach');
+    Route::get('api/rooms/suggest', [\App\Http\Controllers\RoomSuggestionController::class, 'index'])->name('rooms.suggest');
+
+    Route::post('rooms/{room}/tasks/order', [\App\Http\Controllers\RoomTaskOrderController::class, 'updateForRoom'])->name('rooms.tasks.order');
+    Route::post('rooms/{room}/tasks/attach', [\App\Http\Controllers\RoomTaskAttachController::class, 'store'])->name('rooms.tasks.attach');
+    Route::delete('rooms/{room}/tasks/{task}', [\App\Http\Controllers\PropertyController::class, 'detachTask'])->name('rooms.tasks.detach');
+    Route::get('api/tasks/suggest', [\App\Http\Controllers\TaskSuggestionController::class, 'index'])->name('tasks.suggest');
+
+    Route::get('settings', [\App\Http\Controllers\SettingsController::class, 'index'])->name('settings.index');
+    Route::post('settings', [\App\Http\Controllers\SettingsController::class, 'update'])->name('settings.update');
+    Route::get('activity', [\App\Http\Controllers\ActivityController::class, 'index'])->name('activity.index');
+
+    // Photo Management
+    Route::post('sessions/{session}/rooms/{room}/photos', [\App\Http\Controllers\PhotoController::class, 'store'])->name('photos.store');
+    Route::delete('sessions/{session}/photos/{photo}', [\App\Http\Controllers\PhotoController::class, 'destroy'])->name('photos.destroy');
+
+    // Task Media Management
+    Route::post('tasks/{task}/media', [\App\Http\Controllers\TaskMediaController::class, 'store'])->name('tasks.media.store');
+    Route::delete('tasks/{task}/media/{media}', [\App\Http\Controllers\TaskMediaController::class, 'destroy'])->name('tasks.media.destroy');
+
+    // API for dynamic form loading
+    Route::get('api/properties/{property}/rooms', [\App\Http\Controllers\PropertyAssignmentsApiController::class, 'rooms'])->name('api.properties.rooms');
+    Route::get('api/properties/{property}/tasks', [\App\Http\Controllers\PropertyAssignmentsApiController::class, 'propertyTasks'])->name('api.properties.tasks');
+    Route::get('api/properties/{property}/assigned-rooms', [\App\Http\Controllers\PropertyAssignmentsApiController::class, 'assignedRooms'])->name('api.properties.assigned-rooms');
+    Route::get('api/properties/{property}/assigned-property-tasks', [\App\Http\Controllers\PropertyAssignmentsApiController::class, 'assignedPropertyTasks'])->name('api.properties.assigned-property-tasks');
+
+    // Global Room/Task Management
+    Route::post('rooms/bulk-attach-tasks', [\App\Http\Controllers\RoomController::class, 'bulkAttachTasks'])->name('rooms.bulk-attach-tasks');
+
+    // Room Task Management Routes
+    Route::get('rooms/{room}/tasks', [\App\Http\Controllers\RoomController::class, 'tasks'])->name('rooms.tasks.index');
+    Route::post('rooms/{room}/tasks', [\App\Http\Controllers\RoomController::class, 'storeTask'])->name('rooms.tasks.store');
+    Route::get('rooms/{room}/tasks/{task}/edit', [\App\Http\Controllers\RoomController::class, 'editTask'])->name('rooms.tasks.edit');
+    Route::put('rooms/{room}/tasks/{task}', [\App\Http\Controllers\RoomController::class, 'updateTask'])->name('rooms.tasks.update');
+    Route::post('rooms/{room}/tasks/bulk', [\App\Http\Controllers\RoomController::class, 'bulkStoreTask'])->name('rooms.tasks.bulk-store');
+
+    Route::resource('rooms', \App\Http\Controllers\RoomController::class);
+    Route::resource('tasks', \App\Http\Controllers\TaskController::class);
+});
+
+require __DIR__.'/auth.php';

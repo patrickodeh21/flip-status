@@ -1,0 +1,50 @@
+<IfModule mod_rewrite.c>
+    <IfModule mod_negotiation.c>
+        Options -MultiViews -Indexes
+    </IfModule>
+
+    RewriteEngine On
+
+    # Handle Authorization Header
+    RewriteCond %{HTTP:Authorization} .
+    RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+    # Handle X-XSRF-Token Header
+    RewriteCond %{HTTP:x-xsrf-token} .
+    RewriteRule .* - [E=HTTP_X_XSRF_TOKEN:%{HTTP:X-XSRF-Token}]
+
+    # Protect sensitive directories (block direct access)
+    RewriteCond %{REQUEST_URI} ^/(app|bootstrap|config|database|resources|routes|storage|tests|vendor|\.env|\.git|composer\.(json|lock)|package(-lock)?\.json|phpunit\.xml|tailwind\.config\.js|vite\.config\.js|postcss\.config\.js|\.gitignore|README\.md|artisan|node_modules) [NC]
+    RewriteRule ^(.*)$ - [F,L]
+
+    # Allow access to public assets (serve from public folder)
+    RewriteCond %{REQUEST_URI} ^/(build|images|favicon\.ico|robots\.txt) [NC]
+    RewriteRule ^(.*)$ public/$1 [L]
+
+    # Redirect Trailing Slashes If Not A Folder...
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteCond %{REQUEST_URI} (.+)/$
+    RewriteRule ^ %1 [L,R=301]
+
+    # Send Requests To Front Controller...
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteRule ^ index.php [L]
+</IfModule>
+
+# Prevent directory browsing
+Options -Indexes
+
+# Protect .env file
+<FilesMatch "^\.env">
+    Order allow,deny
+    Deny from all
+</FilesMatch>
+
+# Protect sensitive files
+<FilesMatch "^(composer\.(json|lock)|package(-lock)?\.json|\.gitignore|README\.md|artisan|phpunit\.xml)$">
+    Order allow,deny
+    Deny from all
+</FilesMatch>
+
+

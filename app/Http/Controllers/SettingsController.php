@@ -1,0 +1,162 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Http\Requests\SettingsUpdateRequest;
+use App\Models\Setting;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Storage;
+
+class SettingsController extends Controller
+{
+    /**
+     * Display the settings page.
+     */
+    public function index()
+    {
+        $this->assertAdmin();
+
+        $settings = [
+            'site_name' => Setting::get('site_name', config('app.name', 'HK Checklist')),
+            'theme_color' => Setting::get('theme_color', '#842eb8'),
+            'application_logo_path' => Setting::get('application_logo_path'),
+            'application_icon_path' => Setting::get('application_icon_path'),
+            'favicon_path' => Setting::get('favicon_path'),
+            'logo_alignment' => Setting::get('logo_alignment', 'center'),
+            'button_primary_color' => Setting::get('button_primary_color', '#842eb8'),
+            'button_success_color' => Setting::get('button_success_color', '#10b981'),
+            'button_danger_color' => Setting::get('button_danger_color', '#ef4444'),
+            'button_warning_color' => Setting::get('button_warning_color', '#f59e0b'),
+            'button_info_color' => Setting::get('button_info_color', '#06b6d4'),
+            'date_format' => Setting::get('date_format', 'M d, Y'),
+            'time_format' => Setting::get('time_format', '12'),
+            'items_per_page' => Setting::get('items_per_page', 15),
+            'timezone' => Setting::get('timezone', config('app.timezone', 'UTC')),
+            'auto_save_enabled' => Setting::get('auto_save_enabled', true),
+            'auto_save_delay' => Setting::get('auto_save_delay', 400),
+            'notify_session_started' => Setting::get('notify_session_started', true),
+            'notify_session_completed' => Setting::get('notify_session_completed', true),
+            'notify_assignments' => Setting::get('notify_assignments', true),
+        ];
+
+        return view('settings.index', compact('settings'));
+    }
+
+    /**
+     * Update the settings.
+     */
+    public function update(SettingsUpdateRequest $request)
+    {
+        $this->assertAdmin();
+
+        // Handle logo upload
+        if ($request->hasFile('application_logo')) {
+            // Delete old logo if exists
+            $oldLogo = Setting::get('application_logo_path');
+            if ($oldLogo && Storage::disk('public')->exists($oldLogo)) {
+                Storage::disk('public')->delete($oldLogo);
+            }
+
+            // Store new logo
+            $logoPath = $request->file('application_logo')->store('logos', 'public');
+            Setting::set('application_logo_path', $logoPath);
+        }
+
+        if ($request->hasFile('application_icon')) {
+            $request->validate(['application_icon' => 'image|max:2048']);
+            $oldIcon = Setting::get('application_icon_path');
+            if ($oldIcon && Storage::disk('public')->exists($oldIcon)) {
+                Storage::disk('public')->delete($oldIcon);
+            }
+            $iconPath = $request->file('application_icon')->store('logos', 'public');
+            Setting::set('application_icon_path', $iconPath);
+        }
+
+        // Handle favicon upload
+        if ($request->hasFile('favicon')) {
+            // Delete old favicon if exists
+            $oldFavicon = Setting::get('favicon_path');
+            if ($oldFavicon && Storage::disk('public')->exists($oldFavicon)) {
+                Storage::disk('public')->delete($oldFavicon);
+            }
+
+            // Store new favicon
+            $faviconPath = $request->file('favicon')->store('favicons', 'public');
+            Setting::set('favicon_path', $faviconPath);
+        }
+
+        // Update site name
+        Setting::set('site_name', $request->site_name);
+
+        // Update theme color
+        Setting::set('theme_color', $request->theme_color);
+
+        // Update logo alignment
+        if ($request->filled('logo_alignment')) {
+            Setting::set('logo_alignment', $request->logo_alignment);
+        }
+
+        // Update button variant colors
+        if ($request->filled('button_primary_color')) {
+            Setting::set('button_primary_color', $request->button_primary_color);
+        } else {
+            // If button_primary_color wasn't set, sync it with theme_color
+            // This ensures theme color changes apply to buttons and sidebar
+            Setting::set('button_primary_color', $request->theme_color);
+        }
+        if ($request->filled('button_success_color')) {
+            Setting::set('button_success_color', $request->button_success_color);
+        }
+        if ($request->filled('button_danger_color')) {
+            Setting::set('button_danger_color', $request->button_danger_color);
+        }
+        if ($request->filled('button_warning_color')) {
+            Setting::set('button_warning_color', $request->button_warning_color);
+        }
+        if ($request->filled('button_info_color')) {
+            Setting::set('button_info_color', $request->button_info_color);
+        }
+
+        // Update preferences
+        if ($request->filled('date_format')) {
+            Setting::set('date_format', $request->date_format);
+        }
+        if ($request->filled('time_format')) {
+            Setting::set('time_format', $request->time_format);
+        }
+        if ($request->filled('items_per_page')) {
+            Setting::set('items_per_page', $request->items_per_page);
+        }
+        if ($request->filled('timezone')) {
+            Setting::set('timezone', $request->timezone);
+        }
+        Setting::set('auto_save_enabled', $request->boolean('auto_save_enabled'));
+        if ($request->filled('auto_save_delay')) {
+            Setting::set('auto_save_delay', $request->auto_save_delay);
+        }
+        Setting::set('notify_session_started', $request->boolean('notify_session_started'));
+        Setting::set('notify_session_completed', $request->boolean('notify_session_completed'));
+        Setting::set('notify_assignments', $request->boolean('notify_assignments'));
+
+        // Clear cache
+        Setting::clearCache();
+
+        // Clear view cache to ensure updated colors are reflected
+        \Illuminate\Support\Facades\Artisan::call('view:clear');
+
+        return redirect()->route('settings.index')
+            ->with('success', 'Settings updated successfully!');
+    }
+
+    /**
+     * Assert that the current user is an admin.
+     */
+    private function assertAdmin(): void
+    {
+        $user = Auth::user();
+        if (!$user || !$user->hasRole('admin')) {
+            abort(403, 'Only administrators can access settings.');
+        }
+    }
+}

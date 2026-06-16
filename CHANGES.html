@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HK-Checklist - Project Update & Bug Fix Summary</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 800px;
+            margin: 40px auto;
+            padding: 0 20px;
+            background-color: #f9f9f9;
+        }
+        .container {
+            background: #fff;
+            padding: 40px;
+            border-radius: 8px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+            border-top: 8px solid #842eb8;
+        }
+        h1 {
+            color: #842eb8;
+            border-bottom: 2px solid #eee;
+            padding-bottom: 10px;
+            margin-top: 0;
+        }
+        h2 {
+            color: #444;
+            margin-top: 30px;
+            border-left: 4px solid #842eb8;
+            padding-left: 15px;
+            background: #fcfcfc;
+        }
+        .date {
+            color: #888;
+            font-size: 0.9em;
+            margin-bottom: 30px;
+        }
+        ul {
+            padding-left: 20px;
+        }
+        li {
+            margin-bottom: 10px;
+        }
+        strong {
+            color: #000;
+        }
+        .footer {
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 1px solid #eee;
+            font-style: italic;
+            color: #666;
+            text-align: center;
+        }
+        @media print {
+            body { background: none; margin: 0; padding: 0; }
+            .container { box-shadow: none; border: none; padding: 0; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>HK-Checklist - Project Update & Bug Fix Summary</h1>
+        <div class="date">Date: February 14, 2026</div>
+
+        <h2>✅ Checklist & UI Bug Fixes</h2>
+        <ul>
+            <li><strong>Toggle 404 Error Fixed</strong>: Resolved a critical issue where toggling checklist items caused 404 errors. This was caused by a mismatch between the frontend route name (sessions.data) and the backend definition. The route has been standardized.</li>
+            <li><strong>Improved Toggle Reliability</strong>: Updated ChecklistController@togglePropertyTask with relaxed validation to prevent "stuck" checkboxes during session sync.</li>
+            <li><strong>Broken Image Fallbacks</strong>: Implemented onerror logic across all checklist views. If a seeded image or uploaded photo is missing, the system now displays a professional "Photo Missing" placeholder instead of a broken link icon.</li>
+            <li><strong>Storage Symlink Restoration</strong>: Fixed the public/storage junction point to ensure all local media assets are served correctly.</li>
+        </ul>
+
+        <h2>📅 iCal & Scheduling Enhancements</h2>
+        <ul>
+            <li><strong>Dual-Source Calendar Sync</strong>: Added support for both Airbnb and Vrbo iCal feeds simultaneously per property.</li>
+            <li><strong>Unscheduled Checkout Detection</strong>: The dashboard now identifies booking checkouts from iCal that do not yet have a corresponding cleaning session scheduled.</li>
+            <li><strong>Action Required Alerts</strong>: Owners and Admins now receive prominent dashboard notifications for unscheduled checkouts.</li>
+            <li><strong>"NEW" Badge Indicator</strong>: Added visual cues for checkouts and bookings that have been discovered since the user's last login.</li>
+        </ul>
+
+        <h2>👥 Role & Visibility Updates</h2>
+        <ul>
+            <li><strong>Company Role Polishing</strong>: Enhanced the 'Company' user role to properly manage multiple property owners and visibility across their housekeepers.</li>
+            <li><strong>Housekeeper Privacy</strong>: Refined session visibility logic so housekeepers exclusively see their assigned upcoming work.</li>
+            <li><strong>Last Login Tracking</strong>: Implemented session-based tracking of last_login_at to facilitate "New Since Last Login" notifications.</li>
+        </ul>
+
+        <h2>🛠 Setup & Portability</h2>
+        <ul>
+            <li><strong>Clean Delivery Version</strong>: Removed all development artifacts including .git, .env, node_modules, vendor, and unit tests to ensure a clean slate for the user.</li>
+            <li><strong>Start Scripts</strong>: Included start-server.bat and fix-storage-symlink.bat for easy one-click local development setup.</li>
+            <li><strong>Portable Runtime</strong>: Maintained the bin/ folder with a self-contained PHP environment.</li>
+        </ul>
+
+        <div class="footer">
+            Prepared for final delivery. All core requirements for iCal integration and checklist bug fixes have been met.
+        </div>
+    </div>
+</body>
+</html>

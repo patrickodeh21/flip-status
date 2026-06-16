@@ -1,0 +1,835 @@
+/**
+ * Checklist Renderer - Renders checklist dynamically from API data
+ * Reduces Blade code by handling all rendering in JavaScript
+ */
+
+export default function checklistRenderer(config = {}) {
+    return {
+        sessionId: null,
+        reportUrl: null,
+        sessionData: null,
+        loading: false,
+        error: null,
+        renderedContent: '',
+        dataUrl: config.dataUrl || null,
+        photoDeleteUrl: config.photoDeleteUrl || null,
+
+        init() {
+            // Get session ID from data attribute or URL
+            const container = document.querySelector('[data-session-id]');
+            this.sessionId = container?.dataset.sessionId ||
+                window.location.pathname.match(/\/sessions\/([^\/]+)/)?.[1];
+            this.reportUrl = container?.dataset.reportUrl || null;
+
+            if (!this.sessionId) {
+                console.error('Session ID not found');
+                return;
+            }
+
+            // Get CSRF token
+            this.csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '';
+
+            // Build data URL if not provided (fallback for backward compatibility)
+            if (!this.dataUrl) {
+                this.dataUrl = `/sessions/${this.sessionId}/data`;
+            }
+
+            // Load initial data
+            this.loadSessionData();
+        },
+
+        async loadSessionData() {
+            this.loading = true;
+            this.error = null;
+
+            try {
+                const response = await window.api.get(this.dataUrl);
+
+                if (response.success && response.data) {
+                    this.sessionData = response.data;
+                    this.renderChecklist();
+                } else {
+                    throw new Error('Failed to load session data');
+                }
+            } catch (error) {
+                console.error('Error loading session data:', error);
+
+                // Provide user-friendly error messages
+                const status = error.response?.status;
+                let errorMessage = 'Failed to load checklist. Please try again.';
+
+                if (status === 401 || status === 403) {
+                    errorMessage = 'You do not have permission to access this checklist. Please ensure you are logged in with the correct account.';
+                } else if (status === 404) {
+                    errorMessage = 'This session could not be found. It may have been deleted or you may not have access.';
+                } else if (status === 500) {
+                    errorMessage = 'A server error occurred. Please try again or contact support if the problem persists.';
+                } else if (!navigator.onLine) {
+                    errorMessage = 'You appear to be offline. Please check your internet connection and try again.';
+                } else if (error.response?.data?.message) {
+                    errorMessage = error.response.data.message;
+                } else if (error.message) {
+                    errorMessage = error.message;
+                }
+
+                this.error = errorMessage;
+            } finally {
+                this.loading = false;
+            }
+        },
+
+        async skipRoom(roomId) {
+            if (!confirm('Are you sure you want to skip this room?')) return;
+            try {
+                const response = await window.api.post(`/sessions/${this.sessionId}/rooms/${roomId}/skip`);
+                if (response.success) {
+                    // Update local data
+                    if (!this.sessionData.session.skipped_rooms) this.sessionData.session.skipped_rooms = [];
+                    this.sessionData.session.skipped_rooms.push(roomId);
+                    this.renderChecklist();
+                }
+            } catch (error) {
+                console.error('Error skipping room:', error);
+                alert('Failed to skip room.');
+            }
+        },
+
+        async unskipRoom(roomId) {
+            try {
+                const response = await window.api.post(`/sessions/${this.sessionId}/rooms/${roomId}/unskip`);
+                if (response.success) {
+                    // Update local data
+                    this.sessionData.session.skipped_rooms = this.sessionData.session.skipped_rooms.filter(id => id !== roomId);
+                    this.renderChecklist();
+                }
+            } catch (error) {
+                console.error('Error unskipping room:', error);
+                alert('Failed to unskip room.');
+            }
+        },
+
+        renderChecklist() {
+            if (!this.sessionData) return;
+
+            const stage = this.sessionData.stage;
+
+            // Update stage indicator
+            const stageElement = document.querySelector('[data-current-stage]');
+            if (stageElement) {
+                stageElement.textContent = stage.replace(/_/g, ' ').split(' ').map(w =>
+                    w.charAt(0).toUpperCase() + w.slice(1)
+                ).join(' ');
+            }
+
+            // Store rendered HTML in Alpine reactive property
+            let renderedHtml = '';
+
+            // Render based on stage
+            switch (stage) {
+                case 'pre_cleaning':
+                    renderedHtml = this.renderPropertyTasks('pre_cleaning', 'Pre-Cleaning Tasks');
+                    break;
+                case 'rooms':
+                    renderedHtml = this.renderRooms();
+                    break;
+                case 'during_cleaning':
+                    renderedHtml = this.renderPropertyTasks('during_cleaning', 'During-Cleaning Tasks');
+                    break;
+                case 'post_cleaning':
+                    renderedHtml = this.renderPropertyTasks('post_cleaning', 'Post-Cleaning Tasks');
+                    break;
+                case 'inventory':
+                    renderedHtml = this.renderInventory();
+                    break;
+                case 'photos':
+                    renderedHtml = this.renderPhotos();
+                    break;
+                case 'summary':
+                    renderedHtml = this.renderSummary();
+                    break;
+                default:
+                    renderedHtml = '<p class="text-gray-500">Unknown stage</p>';
+            }
+
+            // Store in Alpine reactive property
+            this.renderedContent = renderedHtml;
+
+            // Use setTimeout to ensure Alpine processes the update and DOM is ready
+            setTimeout(() => {
+                // Re-initialize event handlers after rendering
+                this.setupEventHandlers();
+            }, 100);
+        },
+
+        renderPropertyTasks(phase, title) {
+            // Ensure tasks is an array
+            let tasks = this.sessionData.property_tasks[phase] || [];
+            if (!Array.isArray(tasks)) {
+                tasks = Object.values(tasks);
+            }
+            const counts = this.sessionData.counts[phase] || { total: 0, checked: 0 };
+
+            if (tasks.length === 0) {
+                return `
+                    <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
+                        <p class="text-center text-gray-500 dark:text-gray-400 py-8">No ${title.toLowerCase()} defined.</p>
+                    </div>
+                `;
+            }
+
+            return `
+                <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
+                    <div class="mb-6">
+                        <div class="flex items-center justify-between mb-3">
+                            <h2 class="text-2xl font-bold text-gray-900 dark:text-gray-100">${title}</h2>
+                            <div class="text-right">
+                                <div class="text-2xl font-bold text-gray-900 dark:text-gray-100">${counts.checked}/${counts.total}</div>
+                                <div class="text-xs text-gray-500 dark:text-gray-400">completed</div>
+                            </div>
+                        </div>
+                        <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+                            <div class="h-full rounded-full bg-blue-600 transition-all duration-500"
+                                 style="width: ${counts.total > 0 ? (counts.checked / counts.total * 100) : 0}%"></div>
+                        </div>
+                    </div>
+                    <div class="space-y-3">
+                        ${tasks.map(task => this.renderTaskItem(task, null)).join('')}
+                    </div>
+                </div>
+            `;
+        },
+
+        renderRooms() {
+            // Ensure rooms is an array
+            let rooms = this.sessionData.rooms || [];
+            if (!Array.isArray(rooms)) {
+                rooms = Object.values(rooms);
+            }
+
+            // Calculate which rooms are complete and which should be enabled
+            let firstIncompleteIndex = null;
+            rooms.forEach((room, index) => {
+                // Ensure room.tasks is an array
+                const roomTasksArray = Array.isArray(room.tasks) ? room.tasks : Object.values(room.tasks || {});
+                const roomTasks = roomTasksArray.filter(t => room.room_tasks.includes(t.id));
+                const checkedCount = roomTasks.filter(t => t.checklist_item?.checked).length;
+                const totalCount = roomTasks.length;
+
+                // If this room is incomplete and we haven't found the first incomplete yet
+                if (firstIncompleteIndex === null && checkedCount < totalCount && totalCount > 0) {
+                    firstIncompleteIndex = index;
+                }
+            });
+
+            return `
+                <div class="space-y-6">
+                    ${rooms.map((room, index) => {
+                // Ensure room.tasks is an array
+                const roomTasksArray = Array.isArray(room.tasks) ? room.tasks : Object.values(room.tasks || {});
+                const roomTasks = roomTasksArray.filter(t => room.room_tasks.includes(t.id));
+                const checkedCount = roomTasks.filter(t => t.checklist_item?.checked).length;
+                const totalCount = roomTasks.length;
+                const isComplete = checkedCount === totalCount && totalCount > 0;
+                // Check if room is skipped
+                const skippedRooms = this.sessionData.session.skipped_rooms || [];
+                const isSkipped = skippedRooms.includes(room.id);
+                // Room is disabled if skipped (visual style)
+                const isDisabled = isSkipped;
+
+                return `
+                            <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4 sm:p-5 ${isDisabled ? 'opacity-60' : ''}"
+                                 data-room-id="${room.id}" data-room-index="${index}">
+                                <div class="mb-6">
+                                    <div class="flex items-center justify-between mb-3">
+                                        <h3 class="text-base sm:text-lg font-bold text-gray-900 dark:text-gray-100">${room.name}</h3>
+                                        ${isDisabled ? `
+                                            <span class="text-xs px-2 py-1 rounded bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400">
+                                                Complete previous rooms first
+                                            </span>
+                                        ` : ''}
+                                        ${isComplete ? `
+                                            <span class="text-xs px-2 py-1 rounded bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-200">
+                                                ✓ Complete
+                                            </span>
+                                        ` : ''}
+                                        ${isSkipped ? `
+                                            <span class="text-xs px-2 py-1 rounded bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-200">
+                                                Skipped
+                                            </span>
+                                        ` : ''}
+                                        <div class="ml-2">
+                                            ${isSkipped ? `
+                                                <button type="button" @click.stop="unskipRoom(${room.id})" class="text-xs text-blue-600 hover:text-blue-800 underline">Unskip</button>
+                                            ` : `
+                                                <button type="button" @click.stop="skipRoom(${room.id})" class="text-xs text-gray-500 hover:text-gray-700 underline">Skip</button>
+                                            `}
+                                        </div>
+                                    </div>
+                                    <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+                                        <div class="h-full rounded-full bg-blue-600 transition-all duration-500"
+                                             style="width: ${totalCount > 0 ? (checkedCount / totalCount * 100) : 0}%"></div>
+                                    </div>
+                                    <div class="flex items-center justify-between mt-1.5">
+                                        <span class="text-[10px] sm:text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider">Progress</span>
+                                        <span class="text-xs font-bold text-blue-600 dark:text-blue-400">${checkedCount}/${totalCount}</span>
+                                    </div>
+                                </div>
+                                <div class="space-y-2">
+                                    ${roomTasks.map(task => this.renderTaskItem(task, room, isDisabled)).join('')}
+                                </div>
+                            </div>
+                        `;
+            }).join('')}
+                </div>
+            `;
+        },
+
+        renderInventory() {
+            // Ensure rooms is an array
+            let rooms = this.sessionData.rooms || [];
+            if (!Array.isArray(rooms)) {
+                rooms = Object.values(rooms);
+            }
+
+            // Calculate which rooms are complete for inventory
+            let firstIncompleteIndex = null;
+            rooms.forEach((room, index) => {
+                // Ensure room.tasks is an array
+                const roomTasksArray = Array.isArray(room.tasks) ? room.tasks : Object.values(room.tasks || {});
+                const inventoryTasks = roomTasksArray.filter(t => room.inventory_tasks.includes(t.id));
+                if (inventoryTasks.length === 0) return;
+
+                const checkedCount = inventoryTasks.filter(t => t.checklist_item?.checked).length;
+                const totalCount = inventoryTasks.length;
+
+                if (firstIncompleteIndex === null && checkedCount < totalCount && totalCount > 0) {
+                    firstIncompleteIndex = index;
+                }
+            });
+
+            return `
+                <div class="space-y-4">
+                    ${rooms.map((room, index) => {
+                // Ensure room.tasks is an array
+                const roomTasksArray = Array.isArray(room.tasks) ? room.tasks : Object.values(room.tasks || {});
+                const inventoryTasks = roomTasksArray.filter(t => room.inventory_tasks.includes(t.id));
+
+                if (inventoryTasks.length === 0) return '';
+
+                const checkedCount = inventoryTasks.filter(t => t.checklist_item?.checked).length;
+                const totalCount = inventoryTasks.length;
+                const isComplete = checkedCount === totalCount && totalCount > 0;
+                const isDisabled = firstIncompleteIndex !== null && index > firstIncompleteIndex;
+
+                return `
+                            <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4 sm:p-5 ${isDisabled ? 'opacity-60' : ''}"
+                                 data-room-id="${room.id}">
+                                <div class="mb-4">
+                                    <div class="flex items-center justify-between mb-2">
+                                        <h3 class="text-base sm:text-lg font-bold text-gray-900 dark:text-gray-100">${room.name} — Inventory</h3>
+                                        ${isDisabled ? `
+                                            <span class="text-xs px-2 py-1 rounded bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400">
+                                                Complete previous rooms first
+                                            </span>
+                                        ` : ''}
+                                        ${isComplete ? `
+                                            <span class="text-xs px-2 py-1 rounded bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-200">
+                                                ✓ Complete
+                                            </span>
+                                        ` : ''}
+                                    </div>
+                                    <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+                                        <div class="h-full rounded-full bg-purple-600 transition-all duration-500"
+                                             style="width: ${totalCount > 0 ? (checkedCount / totalCount * 100) : 0}%"></div>
+                                    </div>
+                                    <div class="flex items-center justify-between mt-2">
+                                        <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Inventory Progress</span>
+                                        <span class="text-sm text-gray-500 dark:text-gray-400">${checkedCount}/${totalCount}</span>
+                                    </div>
+                                </div>
+                                <div class="space-y-3">
+                                    ${inventoryTasks.map(task => this.renderTaskItem(task, room, isDisabled)).join('')}
+                                </div>
+                            </div>
+                        `;
+            }).join('')}
+                </div>
+            `;
+        },
+
+        renderPhotos() {
+            // Ensure rooms is an array
+            let rooms = this.sessionData.rooms || [];
+            if (!Array.isArray(rooms)) {
+                rooms = Object.values(rooms);
+            }
+            const photoCounts = this.sessionData.photo_counts || {};
+            const photosByRoom = this.sessionData.photos_by_room || {};
+
+            return `
+                <div class="space-y-6">
+                    ${rooms.map(room => {
+                const photoCount = photoCounts[room.id] || 0;
+                const photos = photosByRoom[room.id] || [];
+
+                return `
+                            <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4 sm:p-5" data-room-photos data-room-id="${room.id}">
+                                <div class="mb-4">
+                                    <div class="flex items-center justify-between mb-2">
+                                        <h3 class="text-base sm:text-lg font-bold text-gray-900 dark:text-gray-100">${room.name}</h3>
+                                        <span class="text-xs font-bold text-gray-500 dark:text-gray-400" data-photo-count>${photoCount} Photos</span>
+                                    </div>
+                                </div>
+
+                                <div x-data="photoUploader(${room.id})" class="mb-6">
+                                    <form method="post" enctype="multipart/form-data"
+                                          action="/sessions/${this.sessionId}/rooms/${room.id}/photos"
+                                          data-checklist-photo-form
+                                          data-room-id="${room.id}"
+                                          @submit.prevent.stop="handleSubmit($event)">
+
+                                        <div class="relative flex flex-col items-center justify-center rounded-xl border-2 border-dashed p-4 sm:p-6 mb-4
+                                                   border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800/50
+                                                   hover:border-blue-400 hover:bg-blue-50/50 dark:hover:bg-blue-900/10 transition-colors cursor-pointer"
+                                             @dragover.prevent="hover = true"
+                                             @dragleave.prevent="hover = false"
+                                             @drop.prevent="handleDrop($event)"
+                                             @click="$refs.fileInput.click()"
+                                             :class="hover ? 'border-blue-400 bg-blue-50/50 dark:bg-blue-900/10' : ''">
+                                            <svg class="h-8 w-8 sm:h-10 sm:w-10 text-gray-400 dark:text-gray-500 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                                            </svg>
+                                            <p class="text-xs sm:text-sm text-gray-600 dark:text-gray-400 text-center px-2">
+                                                <span class="text-blue-600 dark:text-blue-400 font-medium">Click to upload</span> or drag and drop
+                                            </p>
+                                            <p class="text-[10px] sm:text-xs text-gray-500 dark:text-gray-500 mt-1">PNG, JPG, JPEG up to 5MB</p>
+
+                                            <input x-ref="fileInput"
+                                                   type="file"
+                                                   name="photos[]"
+                                                   multiple
+                                                   accept="image/*"
+                                                   capture="environment"
+                                                   class="hidden"
+                                                   @change="handleFiles($event)" />
+                                        </div>
+
+                                        <div x-show="previews.length > 0" x-cloak class="mb-4">
+                                            <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 sm:gap-3">
+                                                <template x-for="(preview, index) in previews" :key="index">
+                                                    <div class="relative group rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800"
+                                                         x-data="{ fullscreen: false }">
+                                                        <button type="button" @click="fullscreen = true" class="w-full">
+                                                            <img :src="preview.url"
+                                                                 class="w-full aspect-square object-cover"
+                                                                 :alt="'Preview ' + (index + 1)"
+                                                                 :width="preview.width || 200"
+                                                                 :height="preview.height || 200"
+                                                                 loading="lazy" />
+                                                        </button>
+                                                        <div x-show="fullscreen"
+                                                             x-cloak
+                                                             @click.self="fullscreen = false"
+                                                             @keydown.escape.window="fullscreen = false"
+                                                             class="fixed inset-0 z-50 bg-black/95 flex items-center justify-center p-2 sm:p-4">
+                                                            <img :src="preview.url"
+                                                                 class="max-h-full max-w-full object-contain rounded-lg"
+                                                                 :alt="'Preview ' + (index + 1)"
+                                                                 :width="preview.width || 1920"
+                                                                 :height="preview.height || 1080" />
+                                                            <button type="button"
+                                                                    @click="fullscreen = false"
+                                                                    class="absolute top-2 right-2 sm:top-4 sm:right-4 text-white text-2xl sm:text-3xl hover:text-gray-300 transition-colors bg-black/50 rounded-full w-8 h-8 sm:w-10 sm:h-10 flex items-center justify-center">
+                                                                ×
+                                                            </button>
+                                                        </div>
+                                                        <div class="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                                            <button type="button"
+                                                                    @click.stop="removePreview(index)"
+                                                                    class="px-2 sm:px-3 py-1 sm:py-1.5 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors text-xs sm:text-sm font-medium">
+                                                                Remove
+                                                            </button>
+                                                        </div>
+                                                        <div class="absolute top-1 right-1 sm:top-2 sm:right-2">
+                                                            <span class="text-[10px] sm:text-xs px-1.5 sm:px-2 py-0.5 sm:py-1 rounded bg-black/60 text-white" x-text="formatFileSize(preview.size)"></span>
+                                                        </div>
+                                                    </div>
+                                                </template>
+                                            </div>
+                                        </div>
+
+                                        <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3">
+                                            <button type="submit"
+                                                    :disabled="previews.length === 0 || uploading"
+                                                    class="w-full sm:flex-1 px-4 py-2.5 sm:py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium text-sm sm:text-base">
+                                                <span x-show="!uploading">Upload <span x-text="previews.length"></span> Photo<span x-show="previews.length !== 1">s</span></span>
+                                                <span x-show="uploading" class="flex items-center gap-2">
+                                                    <svg class="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+                                                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                                    </svg>
+                                                    Uploading...
+                                                </span>
+                                            </button>
+                                        </div>
+
+                                        <div x-show="uploading && uploadProgress > 0" x-cloak class="mt-3">
+                                            <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+                                                <div class="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                                                     :style="'width: ' + uploadProgress + '%'"></div>
+                                            </div>
+                                            <p class="text-xs text-gray-600 dark:text-gray-400 mt-1 text-center" x-text="uploadProgress + '%'"></p>
+                                        </div>
+                                    </form>
+                                </div>
+
+                                ${photos.length > 0 ? `
+                                    <div data-photo-gallery class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 sm:gap-3">
+                                        ${photos.map(photo => {
+                    const photoUrl = photo.url || '';
+                    const timeStr = photo.captured_at ? new Date(photo.captured_at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '';
+                    const deleteUrlConfig = this.photoDeleteUrl ? `, { deleteUrl: '${this.photoDeleteUrl}' }` : '';
+                    return `
+                                                <div class="relative group"
+                                                     x-data="photoDeleteHandler(${photo.id}, '${this.sessionId}'${deleteUrlConfig})"
+                                                     data-photo-id="${photo.id}">
+                                                    <button type="button" @click="fullscreen = true" class="w-full">
+                                                        <img src="${photoUrl}"
+                                                             alt="Photo"
+                                                             width="300"
+                                                             height="300"
+                                                             class="aspect-square w-full object-cover rounded-xl border transition hover:opacity-90"
+                                                             loading="lazy" />
+                                                        ${timeStr ? `
+                                                            <span class="absolute bottom-1 right-1 text-[10px] sm:text-xs px-1.5 sm:px-2 py-0.5 sm:py-1 rounded bg-black/60 text-white">
+                                                                ${timeStr}
+                                                            </span>
+                                                        ` : ''}
+                                                    </button>
+                                                    <button type="button"
+                                                            @click.stop="handleDeletePhoto()"
+                                                            :disabled="deleting"
+                                                            class="absolute top-1 right-1 sm:top-2 sm:right-2 p-1 sm:p-1.5 bg-red-600 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-700 disabled:opacity-50"
+                                                            title="Delete photo">
+                                                        <svg class="w-3 h-3 sm:w-4 sm:h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                                                        </svg>
+                                                    </button>
+                                                    <div x-show="fullscreen"
+                                                         x-cloak
+                                                         @click.self="fullscreen = false"
+                                                         @keydown.escape.window="fullscreen = false"
+                                                         class="fixed inset-0 z-50 bg-black/95 flex items-center justify-center p-2 sm:p-4">
+                                                        <img src="${photoUrl}"
+                                                             class="max-h-full max-w-full object-contain rounded-lg"
+                                                             alt="Fullscreen photo"
+                                                             width="1920"
+                                                             height="1080" />
+                                                        <button type="button"
+                                                                @click="fullscreen = false"
+                                                                class="absolute top-2 right-2 sm:top-4 sm:right-4 text-white text-2xl sm:text-3xl hover:text-gray-300 transition-colors bg-black/50 rounded-full w-8 h-8 sm:w-10 sm:h-10 flex items-center justify-center">
+                                                            ×
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            `;
+                }).join('')}
+                                    </div>
+                                ` : `
+                                    <p class="text-center text-gray-500 dark:text-gray-400 py-8">No photos uploaded yet.</p>
+                                `}
+                            </div>
+                        `;
+            }).join('')}
+
+                    <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 text-center">
+                        <button type="button"
+                                @click="
+                                    $el.disabled = true;
+                                    $el.textContent = 'Submitting...';
+                                    window.api.post('/sessions/${this.sessionId}/complete', {})
+                                    .then(res => {
+                                        if (res.success && res.redirect) { window.location.href = res.redirect; }
+                                        else if (res.success) { window.location.reload(); }
+                                        else { window.checklistHandler?.showError(res.message || 'Submission failed'); $el.disabled = false; $el.textContent = 'Submit Checklist'; }
+                                    })
+                                    .catch(err => {
+                                        const msg = err.response?.data?.message || err.message || 'Submission failed';
+                                        window.checklistHandler?.showError(msg);
+                                        $el.disabled = false;
+                                        $el.textContent = 'Submit Checklist';
+                                    });
+                                "
+                                class="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-medium">
+                            Submit Checklist
+                        </button>
+                        <p class="mt-3 text-sm text-gray-500 dark:text-gray-400">
+                            Please ensure all mandatory photo tasks are completed. Timestamp overlay is automatic.
+                        </p>
+                    </div>
+                </div>
+            `;
+        },
+
+        renderSummary() {
+            return '<p class="text-gray-500">Summary view - to be implemented</p>';
+        },
+
+        renderTaskItem(task, room, disabled = false) {
+            const isPropertyTask = room === null;
+            const toggleUrl = isPropertyTask
+                ? `/sessions/${this.sessionId}/tasks/${task.id}/toggle`
+                : `/sessions/${this.sessionId}/rooms/${room.id}/tasks/${task.id}/toggle`;
+            const noteUrl = isPropertyTask
+                ? `/sessions/${this.sessionId}/tasks/${task.id}/note`
+                : `/sessions/${this.sessionId}/rooms/${room.id}/tasks/${task.id}/note`;
+            const photoUrl = isPropertyTask
+                ? `/sessions/${this.sessionId}/tasks/${task.id}/photo`
+                : `/sessions/${this.sessionId}/rooms/${room.id}/tasks/${task.id}/photo`;
+
+            const checked = task.checklist_item?.checked || false;
+            const hasInstructions = task.instructions && task.instructions.trim().length > 0;
+            const hasMedia = task.media && task.media.length > 0;
+            const showDetails = hasInstructions || hasMedia;
+            const isViewOnly = this.sessionData.is_view_only || false;
+            const taskDisabled = disabled || isViewOnly;
+
+            // Check if user has added a note
+            const userNote = task.checklist_item?.note || '';
+            const hasUserNote = userNote.trim().length > 0;
+
+            // const name = task.name.replace(/"/g, '\"').toLowerCase();
+
+            return `
+                <div data-task-item data-task-id="${task.id}"
+                     class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600 transition-all duration-200 ${checked ? 'opacity-90' : ''}"
+                     x-data="{
+                         detailsOpen: false,
+                         noteValue: '${(userNote).replace(/'/g, "\\'")}',
+                         itemPhotos: ${JSON.stringify(task.checklist_item?.photos || []).replace(/"/g, '&quot;')},
+                         get photoRequirement() {
+                             const name = '${task.name.toLowerCase().replace(/'/g, "\\'")}';
+                             if (name.includes('photo') || name.includes('picture') || name.includes('image')) return 1;
+                             return 0;
+                         },
+                         get isMandatoryPhoto() {
+                             return this.photoRequirement > 0;
+                         },
+                         get canToggle() {
+                             if (this.isMandatoryPhoto && this.itemPhotos.length < this.photoRequirement) return false;
+                             return true;
+                         }
+                     }">
+                    <div class="p-4 flex flex-col h-full">
+                        <div class="flex items-start gap-4 flex-1">
+                            <div class="flex-shrink-0 pt-1">
+                                <button type="button"
+                                        data-checklist-toggle
+                                        @click="canToggle ? handleToggle($event, $el) : showError('This task requires a photo before it can be completed.')"
+                                        data-toggle-url="${toggleUrl}"
+                                        data-checked="${checked}"
+                                        :disabled="${taskDisabled} || noteSaving || photoUploading"
+                                        class="relative w-7 h-7 rounded-lg border-2 flex items-center justify-center transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 ${taskDisabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:scale-110 shadow-sm'} ${checked ? 'bg-green-600 border-green-600 text-white' : 'bg-white dark:bg-gray-700 border-gray-300 dark:border-gray-600'}"
+                                        :class="{ 'opacity-50 grayscale cursor-not-allowed': isMandatoryPhoto && itemPhotos.length === 0 && !${checked} }"
+                                        aria-label="${checked ? 'Mark as incomplete' : 'Mark as complete'}">
+                                    ${checked ? `
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path>
+                                        </svg>
+                                    ` : `
+                                        <template x-if="isMandatoryPhoto && itemPhotos.length === 0">
+                                            <svg class="w-4 h-4 text-orange-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"></path>
+                                            </svg>
+                                        </template>
+                                    `}
+                                </button>
+                            </div>
+
+                            <div class="flex-1 min-w-0">
+                                <div class="flex flex-col gap-1">
+                                    <h3 data-task-name class="text-lg font-bold text-gray-900 dark:text-gray-100 transition-all ${checked ? 'line-through text-gray-400 dark:text-gray-500 font-medium' : ''}">
+                                        ${task.name}
+                                    </h3>
+
+                                    <template x-if="isMandatoryPhoto && itemPhotos.length < photoRequirement && !${checked}">
+                                        <span class="inline-flex items-center gap-1 text-[10px] font-bold text-orange-600 uppercase tracking-tight">
+                                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+                                            </svg>
+                                            <span>Photo Required</span>
+                                        </span>
+                                    </template>
+
+                                    ${showDetails ? `
+                                        <div class="mt-2 text-[10px] w-full">
+                                            <button type="button" @click="detailsOpen = !detailsOpen"
+                                                    class="inline-flex items-center gap-1.5 font-bold text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition-colors bg-gray-100 dark:bg-gray-700 rounded-full px-3 py-1">
+                                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                                                </svg>
+                                                <span x-text="detailsOpen ? 'Hide Notes' : 'Read Notes'">Read Notes</span>
+                                            </button>
+                                        </div>
+                                    ` : ''}
+                                </div>
+
+                                <!-- Footer Actions -->
+                                <div class="mt-4 flex items-center justify-between border-t border-gray-100 dark:border-gray-800/50 pt-3" data-note-container>
+                                    <div class="flex items-center gap-1.5">
+                                        <!-- Note Icon Button -->
+                                        <button type="button"
+                                                @click="window.dispatchEvent(new CustomEvent('open-note-modal', { detail: { noteUrl: '${noteUrl}', noteValue: noteValue, taskId: ${task.id} } }))"
+                                                class="flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 hover:text-blue-600 transition-all active:scale-95"
+                                                :class="noteValue ? 'border-blue-200 bg-blue-50 text-blue-600' : ''"
+                                                title="Add Note">
+                                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path>
+                                            </svg>
+                                            <span class="text-xs font-bold uppercase tracking-tight">Note</span>
+                                        </button>
+
+                                        <!-- Camera Icon Button -->
+                                        <button type="button"
+                                                @click="window.dispatchEvent(new CustomEvent('open-photo-modal', { detail: { photoUrl: '${photoUrl}', taskId: ${task.id} } }))"
+                                                class="flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:bg-green-50 dark:hover:bg-green-900/20 hover:text-green-600 transition-all active:scale-95"
+                                                :class="itemPhotos.length > 0 ? 'border-green-200 bg-green-50 text-green-600' : ''"
+                                                title="Upload Photo">
+                                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"></path>
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                                            </svg>
+                                            <span class="text-xs font-bold uppercase tracking-tight">Photo</span>
+                                            <template x-if="itemPhotos.length > 0">
+                                                <span class="bg-green-600 text-white text-[10px] w-4 h-4 rounded-full flex items-center justify-center" x-text="itemPhotos.length"></span>
+                                            </template>
+                                        </button>
+                                    </div>
+
+                                    <input type="hidden" data-note-input x-model="noteValue" />
+                                </div>
+
+                                ${showDetails ? `
+                                    <div x-show="detailsOpen" x-collapse x-cloak class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+                                        ${hasInstructions ? `
+                                            <div class="mb-3">
+                                                <div class="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-1.5">Instructions</div>
+                                                <div class="prose dark:prose-invert prose-sm max-w-none text-gray-600 dark:text-gray-400 leading-relaxed">
+                                                    ${this.formatInstructions(task.instructions)}
+                                                </div>
+                                            </div>
+                                        ` : ''}
+
+                                         ${hasMedia ? `
+                                            <div class="mb-3">
+                                                <div class="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-1.5">Examples</div>
+                                                <div class="grid grid-cols-3 gap-2">
+                                                    ${task.media.map(media => `
+                                                        <div class="relative rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700 group bg-gray-100 dark:bg-gray-800">
+                                                            ${media.type === 'image' ? `
+                                                                <button type="button" @click="window.dispatchEvent(new CustomEvent('open-gallery', { detail: { src: '${media.url}' } }))" class="block w-full h-full">
+                                                                    <div class="aspect-video w-full relative bg-gray-200 dark:bg-gray-700 rounded overflow-hidden">
+                                                                        <img src="${media.thumbnail || media.url}" alt="${media.caption || 'Task media'}"
+                                                                             class="w-full h-full object-cover transition-transform group-hover:scale-105"
+                                                                             onerror="this.onerror=null; this.src='https://placehold.co/400x300/e2e8f0/64748b?text=Image+Not+Found'; this.parentElement.classList.add('bg-gray-200');"
+                                                                             loading="lazy" />
+                                                                    </div>
+                                                                </button>
+                                                            ` : `
+                                                                <video src="${media.url}" class="w-full h-24 object-cover" controls muted></video>
+                                                            `}
+                                                            ${media.caption ? `
+                                                                <div class="absolute bottom-0 left-0 right-0 bg-black/50 p-1">
+                                                                    <p class="text-[10px] text-white truncate text-center">${this.escapeHtml(media.caption)}</p>
+                                                                </div>
+                                                            ` : ''}
+                                                        </div>
+                                                    `).join('')}
+                                                </div>
+                                            </div>
+                                        ` : ''}
+
+                                        <template x-if="itemPhotos.length > 0">
+                                            <div class="mb-1">
+                                                <div class="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-1.5">Your Photos</div>
+                                                <div class="grid grid-cols-3 gap-2">
+                                                    <template x-for="photo in itemPhotos" :key="photo.id">
+                                                        <div class="relative rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700 group bg-gray-100 dark:bg-gray-800">
+                                                            <button type="button" @click="window.dispatchEvent(new CustomEvent('open-gallery', { detail: { src: photo.url } }))" class="block w-full">
+                                                                <img :src="photo.url" alt="Attached photo"
+                                                                     class="w-full h-24 object-cover transition-transform group-hover:scale-105"
+                                                                     loading="lazy" />
+                                                            </button>
+                                                            <template x-if="photo.note">
+                                                                <div class="absolute bottom-0 left-0 right-0 bg-black/50 p-1">
+                                                                    <p class="text-[10px] text-white truncate text-center" x-text="photo.note"></p>
+                                                                </div>
+                                                            </template>
+                                                        </div>
+                                                    </template>
+                                                </div>
+                                            </div>
+                                        </template>
+                                    </div>
+                                ` : ''}
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+            `;
+        },
+
+        formatInstructions(instructions) {
+            if (!instructions) return '';
+            // Convert newlines to <br> and escape HTML
+            return this.escapeHtml(instructions).replace(/\n/g, '<br>');
+        },
+
+        escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        },
+
+        setupEventHandlers() {
+            // Event handlers are set up by the checklist.js module
+            // This is called after rendering to ensure new elements are handled
+            if (window.checklistHandler) {
+                window.checklistHandler.setupFormHandlers();
+            }
+        },
+
+        // Public method to refresh data and re-render
+        async refresh() {
+            await this.loadSessionData();
+        },
+
+        // Check if a room is complete and unlock next room
+        checkRoomCompletion() {
+            if (!this.sessionData) return;
+
+            // Re-calculate completion status
+            let rooms = this.sessionData.rooms || [];
+            if (!Array.isArray(rooms)) {
+                rooms = Object.values(rooms);
+            }
+            rooms.forEach((room, index) => {
+                // Ensure room.tasks is an array
+                const roomTasksArray = Array.isArray(room.tasks) ? room.tasks : Object.values(room.tasks || {});
+                const roomTasks = roomTasksArray.filter(t => room.room_tasks.includes(t.id));
+                const checkedCount = roomTasks.filter(t => t.checklist_item?.checked).length;
+                const totalCount = roomTasks.length;
+                const isComplete = checkedCount === totalCount && totalCount > 0;
+
+                // If room just completed, refresh to unlock next room
+                if (isComplete) {
+                    // Small delay to ensure database is updated
+                    setTimeout(() => {
+                        this.refresh();
+                    }, 500);
+                }
+            });
+        },
+    };
+}

@@ -1,0 +1,34 @@
+PLATFORM UPDATE SUMMARY - FEB 10, 2026
+
+Dear Client,
+
+We have successfully implemented the following updates to the HK-Checklist platform. The code has been updated on GitHub and deployed to the production environment.
+
+1. REDESIGNED CHECKLIST INTERFACE
+   - Optimized for mobile usability with a "Task-First" layout.
+   - Task names are now larger and more prominent for easier reading on the go.
+   - Action icons (Notes/Photos) are moved to a cleaner footer section.
+   - "View Instructions" is now collapsible to keep the interface clutter-free.
+
+2. MANDATORY ROOM EVIDENCE (8-PHOTO RULE)
+   - Every room now automatically includes a mandatory task: "📸 Take 8 Photos of this Room (Required)".
+   - Cleaners are restricted from completing this task until the 8-photo requirement is met.
+   - Dynamic counter (e.g., "3/8 Photos Required") provides real-time progress guidance.
+
+3. ADVANCED COMPANY & MULTI-OWNER SUPPORT
+   - "Company" Role: Company users can now supervise all properties, sessions, and housekeepers belonging to the owners they manage.
+   - Multi-Owner Assignments: Housekeepers can now be attached to multiple owners or companies simultaneously, allowing them to manage their entire portfolio from one account.
+
+4. PROPERTY & INTEGRATION UPGRADES
+   - Google Maps: Added Google Places autocomplete and automatic Latitude/Longitude geocoding to the property address field.
+   - Integrations Section: New dedicated area in Property Settings for linking Airbnb and Vrbo iCal calendars for occupancy syncing.
+
+5. PERFORMANCE & BUG FIXES
+   - Resolved broken image links in notes and instructions.
+   - Fixed 404 errors during checklist item toggling.
+   - Corrected session visibility so housekeepers only see relevant upcoming work.
+
+The updated source code is available in the GitHub repository.
+
+Live URL: https://hk-checklist.onrender.com (Pending final Render build)
+GitHub: https://github.com/naik03shashank/hk-checklist.git

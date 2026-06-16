@@ -1,0 +1,15 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+      - /app/vendor
+      - /app/node_modules
+    env_file:
+      - .env
+    environment:
+      - APP_ENV=local
+      - APP_DEBUG=true
+    command: sh -c "php artisan migrate --force && php artisan db:seed --force && php -d upload_max_filesize=512M -d post_max_size=512M -d memory_limit=512M -d max_input_time=600 -S 0.0.0.0:8000 -t public public/router.php"
