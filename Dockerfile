@@ -43,7 +43,6 @@ RUN chmod -R 775 bootstrap/cache
 
 # Expose port
 EXPOSE 8000
-ENTRYPOINT ["/bin/bash", "-c"]
 
 # Runtime: volume is mounted here so sqlite and storage setup happens now
 CMD bash -c "\
