@@ -33,12 +33,17 @@ COPY . .
 # Install dependencies
 RUN composer install --optimize-autoloader
 RUN npm install && npm run build
+# Patch Laravel ServeCommand to cast port to int (Railway injects PORT as string)
+RUN sed -i 's/return $port + $this->portOffset;/return (int)$port + $this->portOffset;/' \
+    vendor/laravel/framework/src/Illuminate/Foundation/Console/ServeCommand.php
+
 
 # Set permissions for dirs that exist at build time
 RUN chmod -R 775 bootstrap/cache
 
 # Expose port
 EXPOSE 8000
+ENTRYPOINT ["/bin/bash", "-c"]
 
 # Runtime: volume is mounted here so sqlite and storage setup happens now
 CMD bash -c "\
