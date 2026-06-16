@@ -48,4 +48,5 @@ CMD bash -c "\
     && php artisan storage:link --force \
     && php artisan migrate --force \
     && php artisan db:seed --force \
-    && php -d upload_max_filesize=512M -d post_max_size=512M -d memory_limit=512M -d max_input_time=600 -S 0.0.0.0:8000 -t public public/router.php"
+    && unset PHP_CLI_SERVER_WORKERS \
+    && php -d upload_max_filesize=512M -d post_max_size=512M -d memory_limit=512M -d max_input_time=600 -S 0.0.0.0:${PORT:-8000} -t public public/router.php"
